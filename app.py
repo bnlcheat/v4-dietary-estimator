@@ -18,36 +18,50 @@ st.title("🥗 V4-Pro Dietary Intake Estimator")
 st.markdown("Dual-Branch **EfficientNetB0** predicting total mass (log-space) and fractional macronutrient density (softmax).")
 
 # ---------------------------------------------------------
-# Custom Loss Definition (Required for .keras deserialization)
-# ---------------------------------------------------------
-@tf.function
-def relative_accuracy_loss(y_true, y_pred):
-    mass_true = y_true[:, 0]
-    mass_pred = y_pred[:, 0]
-    mass_rel_err = tf.abs(mass_true - mass_pred) / (mass_true + 0.1)
-    
-    fractions_true = y_true[:, 1:]
-    fractions_pred = y_pred[:, 1:]
-    frac_err = tf.reduce_mean(tf.abs(fractions_true - fractions_pred), axis=-1)
-    
-    return tf.reduce_mean(2.5 * mass_rel_err + 2.0 * frac_err)
-
-# ---------------------------------------------------------
-# Loader utilizing Streamlit 1.24 compatible caching
+# Architecture Builder & Weights Loader
 # ---------------------------------------------------------
 @st.cache_resource
 def load_system_model():
-    model_path = "v4_pro_model.keras"
-    if not os.path.exists(model_path):
-        st.error(f"Missing '{model_path}'. Please make sure it is in the same folder as app.py.")
+    # Detects either filename automatically to prevent naming mismatches
+    weights_path = "v4_weights.h5" if os.path.exists("v4_weights.h5") else "model_v4_weights.h5"
+    
+    if not os.path.exists(weights_path):
+        st.error(f"Missing weights file ('v4_weights.h5' or 'model_v4_weights.h5'). Please check your repository.")
         st.stop()
     
-    # Load model passing the custom loss function mapping
-    return tf.keras.models.load_model(model_path, custom_objects={'relative_accuracy_loss': relative_accuracy_loss})
+    # Reconstruct the dual-branch network topology
+    base_v4 = tf.keras.applications.EfficientNetB0(weights=None, include_top=False, input_shape=(224, 224, 3))
+    inputs = tf.keras.layers.Input(shape=(224, 224, 3), dtype=tf.float32, name="plate_input")
+    
+    data_aug_v4 = tf.keras.Sequential([
+        tf.keras.layers.RandomFlip("horizontal"), 
+        tf.keras.layers.RandomRotation(0.08), 
+        tf.keras.layers.RandomZoom(0.08),
+    ], name="v4_aug")
+    x = data_aug_v4(inputs)
+
+    features = base_v4(x, training=False)
+    features = tf.keras.layers.GlobalAveragePooling2D()(features)
+    features = tf.keras.layers.BatchNormalization()(features)
+
+    mass_branch = tf.keras.layers.Dense(128, activation='swish')(features)
+    mass_branch = tf.keras.layers.Dropout(0.2)(mass_branch)
+    pred_log_mass = tf.keras.layers.Dense(1, activation='relu', dtype='float32', name='mass_output')(mass_branch)
+
+    comp_branch = tf.keras.layers.Dense(128, activation='swish')(features)
+    comp_branch = tf.keras.layers.Dropout(0.2)(comp_branch)
+    pred_fractions = tf.keras.layers.Dense(4, activation='softmax', dtype='float32', name='fractions_output')(comp_branch)
+
+    v4_pro_output = tf.keras.layers.Concatenate(axis=-1, name='final_output')([pred_log_mass, pred_fractions])
+    model = tf.keras.models.Model(inputs=inputs, outputs=v4_pro_output)
+    
+    # Load weights
+    model.load_weights(weights_path)
+    return model
 
 try:
     model = load_system_model()
-    st.sidebar.success("✅ V4-Pro Model loaded successfully!")
+    st.sidebar.success("✅ V4-Pro Model & Weights loaded successfully!")
 except Exception as err:
     st.sidebar.error(f"Initialization Error: {err}")
     st.stop()
@@ -82,32 +96,29 @@ if uploaded_file is not None:
 
     with col2:
         with st.spinner("Decoding dual-branch network predictions..."):
-            # 1. Native Tensor Scaling & Explicit EfficientNet Preprocessing
             img_arr = np.array(img.resize((224, 224)), dtype=np.float32)
             img_input = tf.keras.applications.efficientnet.preprocess_input(np.expand_dims(img_arr, axis=0))
 
-            # 2. Forward Pass cleanly without deserialization errors
             raw_pred = model.predict(img_input, verbose=0)
             pred = np.array(raw_pred).squeeze()
             if pred.ndim > 1:
                 pred = pred[0]
             
-            # 3. Unpack Branch A (Mass) via expm1
+            # Unpack Branch A (Mass)
             pred_mass = float(np.expm1(pred[0]))
-            pred_mass = max(pred_mass, 1.0) # Prevent zero-mass plates
+            pred_mass = max(pred_mass, 1.0)
 
-            # 4. Unpack Branch B (Softmax Fractions)
+            # Unpack Branch B (Softmax Fractions)
             f_fat = float(pred[1])
             f_carb = float(pred[2])
             f_prot = float(pred[3])
             f_water = float(pred[4])
             
-            # 5. Translate Fractions to Grams
             pred_fat = pred_mass * f_fat
             pred_carb = pred_mass * f_carb
             pred_prot = pred_mass * f_prot
             
-            # 6. Thermodynamic Energy Coupling (Atwater factors)
+            # Thermodynamic Energy Coupling
             pred_cals = (9.0 * pred_fat) + (4.0 * pred_carb) + (4.0 * pred_prot)
             moisture = pred_mass * f_water
 
