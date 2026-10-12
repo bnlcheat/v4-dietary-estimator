@@ -23,7 +23,7 @@ st.markdown("Dual-Branch **EfficientNetB0** predicting total mass (log-space) an
 @st.cache_resource
 def load_system_model():
     # Detects either filename automatically to prevent naming mismatches
-    weights_path = "v4_weights.h5" if os.path.exists("v4_weights.h5") else "model_v4_weights.h5"
+    weights_path = "v4_weights.keras"
     
     if not os.path.exists(weights_path):
         st.error(f"Missing weights file ('v4_weights.h5' or 'model_v4_weights.h5'). Please check your repository.")
