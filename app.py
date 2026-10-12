@@ -22,11 +22,15 @@ st.markdown("Dual-Branch **EfficientNetB0** predicting total mass (log-space) an
 # ---------------------------------------------------------
 @st.cache_resource
 def load_system_model():
-    # Detects either filename automatically to prevent naming mismatches
-    weights_path = "v4_weights.keras"
-    
-    if not os.path.exists(weights_path):
-        st.error(f"Missing weights file ('v4_weights.h5' or 'model_v4_weights.h5'). Please check your repository.")
+    # Automatically detect the weights file regardless of what you named it
+    if os.path.exists("v4_weights.keras"):
+        weights_path = "v4_weights.keras"
+    elif os.path.exists("v4_weights.h5"):
+        weights_path = "v4_weights.h5"
+    elif os.path.exists("model_v4_weights.h5"):
+        weights_path = "model_v4_weights.h5"
+    else:
+        st.error(f"Missing weights file. Please upload your 17.5 MB weights file to GitHub.")
         st.stop()
     
     # Reconstruct the dual-branch network topology
@@ -58,23 +62,6 @@ def load_system_model():
     # Load weights
     model.load_weights(weights_path)
     return model
-
-try:
-    model = load_system_model()
-    st.sidebar.success("✅ V4-Pro Model & Weights loaded successfully!")
-except Exception as err:
-    st.sidebar.error(f"Initialization Error: {err}")
-    st.stop()
-
-st.sidebar.header("Model Specifications")
-st.sidebar.markdown(
-    """
-    - **Backbone:** EfficientNetB0
-    - **Branch A:** Log1p Mass Regression
-    - **Branch B:** Softmax Macro Fractions
-    - **Physics:** Thermodynamic Atwater Coupling
-    """
-)
 
 # ---------------------------------------------------------
 # Image Upload & V4 Inference Pipeline
